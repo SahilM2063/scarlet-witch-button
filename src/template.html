@@ -174,7 +174,8 @@ const depthFor = (kind) => inject(new THREE.MeshDepthMaterial({ depthPacking: TH
 const btn = new THREE.Group();
 scene.add(btn);
 const BUTTON_IMG = "/*__BUTTON__*/", GLOW_IMG = "/*__GLOW__*/";
-const LW = 2.6, LH = LW * 177 / 841;                  // keeps the asset's aspect
+const LW = 2.6, LH = LW * 383 / 1620;                 // keeps the asset's aspect
+const LABEL_Y = 0.608, RAILS = [0.339, 0.877];        // label centre / inner rails, as fractions of the image height (tools/extract_button.py)
 
 const loadImg = (src) => new Promise((res) => { const i = new Image(); i.onload = () => res(i); i.src = src; });
 
@@ -195,7 +196,7 @@ const glowMat = new THREE.MeshBasicMaterial({
 });
 const glows = [-1, 1].map((side) => {
   const m = new THREE.Mesh(new THREE.PlaneGeometry(LW * 0.62, LW * 0.62 * 32 / 449), glowMat);
-  m.position.set(0, side * LH * 0.4, 0.004);
+  m.position.set(0, (0.5 - RAILS[side > 0 ? 0 : 1]) * LH, 0.004);
   m.renderOrder = 2;
   btn.add(m);
   return m;
@@ -203,17 +204,17 @@ const glows = [-1, 1].map((side) => {
 
 async function buildButton() {
   const [img, glowImg] = await Promise.all([loadImg(BUTTON_IMG), loadImg(GLOW_IMG),
-    Promise.race([document.fonts.load("600 104px Cinzel"), new Promise((r) => setTimeout(r, 1500))])]);
+    Promise.race([document.fonts.load("600 92px Cinzel"), new Promise((r) => setTimeout(r, 1500))])]);
   const c = document.createElement("canvas");
-  c.width = img.width * 2; c.height = img.height * 2;
+  c.width = img.width; c.height = img.height;
   const g = c.getContext("2d");
   g.imageSmoothingQuality = "high";
   g.drawImage(img, 0, 0, c.width, c.height);
   // lettering in the sheet's style: pale serif caps, wide tracking, dark crimson outline
-  g.font = "600 104px Cinzel, Georgia, serif";
+  g.font = "600 92px Cinzel, Georgia, serif";
   g.textAlign = "center"; g.textBaseline = "middle";
-  if ("letterSpacing" in g) g.letterSpacing = "30px";
-  const x = c.width / 2 + 15, y = c.height / 2 + 6;
+  if ("letterSpacing" in g) g.letterSpacing = "26px";
+  const x = c.width / 2 + 13, y = c.height * LABEL_Y + 4;
   g.lineJoin = "round";
   g.shadowColor = "rgba(0, 0, 0, .55)"; g.shadowBlur = 10; g.shadowOffsetY = 3;
   g.strokeStyle = "#4a0610"; g.lineWidth = 9; g.strokeText("CHAOS MAGIC", x, y);
