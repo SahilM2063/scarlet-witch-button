@@ -2,3 +2,4 @@ node_modules/
 __pycache__/
 .claude/
 model/crown_source.glb
+recording/
