@@ -22,10 +22,11 @@
   }
   canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: manipulation; }
   .ui { position: fixed; left: 0; right: 0; margin: 0; text-align: center; pointer-events: none; color: var(--muted); }
+  .hint { bottom: 52px; font-size: 12px; letter-spacing: .18em; text-transform: lowercase; transition: opacity .6s ease; }
   footer.ui { bottom: 20px; }
   .credit {
     position: fixed; right: 12px; bottom: 10px; z-index: 2;
-    margin: 0; font-size: 9px; letter-spacing: .06em; color: var(--muted); opacity: .75;
+    margin: 0; font-size: 12px; letter-spacing: .18em; color: var(--muted);   /* same type as the hints */
   }
   .credit a { color: inherit; text-decoration: none; transition: opacity .2s ease; }
   .credit a:hover, .credit a:focus-visible { text-decoration: underline; }
@@ -41,6 +42,7 @@
 <body>
 <canvas id="c" aria-hidden="true"></canvas>
 <button class="sr" id="a11y" type="button">Cast chaos magic</button>
+<p class="ui hint" id="hint" aria-live="polite">click</p>
 <p class="credit">meet dev <a href="https://x.com/makadia_sahil" target="_blank" rel="noopener"><i>Sahil</i></a></p>
 <footer class="ui"><b>The Scarlet Witch</b></footer>
 
@@ -61,6 +63,7 @@ const MODEL = "Z2xURgIAAABkswoAmAsAAEpTT057ImFzc2V0Ijp7ImdlbmVyYXRvciI6ImdsVEYtV
 const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const coarse = matchMedia("(pointer: coarse)").matches;
 const canvas = document.getElementById("c");
+const hint = document.getElementById("hint");
 const a11y = document.getElementById("a11y");
 
 // ================================================================ renderer / scene
@@ -472,13 +475,14 @@ function apply(time) {
 function toggle() {
   if (mode === "undo") return;
   if (mode === "rest" || mode === "rewind") {
-    mode = "cast"; a11y.textContent = "Undo the hex";
+    mode = "cast"; hint.textContent = "click the crown to undo"; a11y.textContent = "Undo the hex";
   } else if (mode === "cast") {
-    mode = "rewind"; a11y.textContent = "Cast chaos magic";
+    mode = "rewind"; hint.textContent = "click"; a11y.textContent = "Cast chaos magic";
   } else {
-    mode = "undo"; u = 0; a11y.textContent = "Cast chaos magic";
+    mode = "undo"; u = 0; hint.textContent = "again?"; a11y.textContent = "Cast chaos magic";
   }
   if (reduced) { p = mode === "cast" ? 1 : 0; u = 0; mode = p ? "crown" : "rest"; }
+  hint.style.opacity = 0;
   wake();
 }
 
@@ -486,13 +490,13 @@ function advance(dt) {
   if (mode === "cast") {
     if (!crownReady && p * CAST > 0.4) return;            // hold until the model is parsed
     p = clamp01(p + dt / CAST);
-    if (p === 1) mode = "crown";
+    if (p === 1) { mode = "crown"; hint.style.opacity = 1; }
   } else if (mode === "rewind") {
     p = clamp01(p - dt / CAST * 1.6);
-    if (p === 0) mode = "rest";
+    if (p === 0) { mode = "rest"; hint.style.opacity = 1; }
   } else if (mode === "undo") {
     u = clamp01(u + dt / UNDO);
-    if (u === 1) { mode = "rest"; p = 0; u = 0; }
+    if (u === 1) { mode = "rest"; p = 0; u = 0; hint.style.opacity = 1; }
   }
 }
 
