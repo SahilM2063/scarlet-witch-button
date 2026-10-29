@@ -26,10 +26,10 @@
   footer.ui { bottom: 18px; font-size: 11px; letter-spacing: .08em; }
   .credit {
     position: fixed; right: 12px; bottom: 10px; z-index: 2;
-    font-size: 9px; letter-spacing: .06em; color: var(--muted); text-decoration: none; opacity: .75;
-    transition: opacity .2s ease, color .2s ease;
+    margin: 0; font-size: 9px; letter-spacing: .06em; color: var(--muted); opacity: .75;
   }
-  .credit:hover, .credit:focus-visible { opacity: 1; color: var(--hex); }
+  .credit a { color: inherit; text-decoration: none; transition: opacity .2s ease; }
+  .credit a:hover, .credit a:focus-visible { text-decoration: underline; }
   footer b { display: block; font: 600 13px/1.6 Cinzel, Georgia, serif; letter-spacing: .32em; color: #7d1328; }
   .sr {
     position: fixed; left: 50%; top: 50%; width: 1px; height: 1px; padding: 0; margin: 0;
@@ -43,7 +43,7 @@
 <canvas id="c" aria-hidden="true"></canvas>
 <button class="sr" id="a11y" type="button">Cast chaos magic</button>
 <p class="ui hint" id="hint" aria-live="polite">click</p>
-<a class="credit" href="https://x.com/makadia_sahil" target="_blank" rel="noopener">made by dev &middot; @makadia_sahil</a>
+<p class="credit">meet dev <a href="https://x.com/makadia_sahil" target="_blank" rel="noopener"><i>Sahil</i></a></p>
 <footer class="ui"><b>The Scarlet Witch</b>real-time WebGL &middot; smoke written in shaders</footer>
 
 <script type="importmap">
@@ -204,17 +204,17 @@ const glows = [-1, 1].map((side) => {
 
 async function buildButton() {
   const [img, glowImg] = await Promise.all([loadImg(BUTTON_IMG), loadImg(GLOW_IMG),
-    Promise.race([document.fonts.load("600 92px Cinzel"), new Promise((r) => setTimeout(r, 1500))])]);
+    Promise.race([document.fonts.load("600 70px Cinzel"), new Promise((r) => setTimeout(r, 1500))])]);
   const c = document.createElement("canvas");
   c.width = img.width; c.height = img.height;
   const g = c.getContext("2d");
   g.imageSmoothingQuality = "high";
   g.drawImage(img, 0, 0, c.width, c.height);
   // lettering in the sheet's style: pale serif caps, wide tracking, dark crimson outline
-  g.font = "600 92px Cinzel, Georgia, serif";
+  g.font = "600 70px Cinzel, Georgia, serif";
   g.textAlign = "center"; g.textBaseline = "middle";
-  if ("letterSpacing" in g) g.letterSpacing = "26px";
-  const x = c.width / 2 + 13, y = c.height * LABEL_Y + 4;
+  if ("letterSpacing" in g) g.letterSpacing = "20px";
+  const x = c.width / 2 + 10, y = c.height * LABEL_Y + 3;
   g.lineJoin = "round";
   g.shadowColor = "rgba(0, 0, 0, .55)"; g.shadowBlur = 10; g.shadowOffsetY = 3;
   g.strokeStyle = "#4a0610"; g.lineWidth = 9; g.strokeText("CHAOS MAGIC", x, y);
