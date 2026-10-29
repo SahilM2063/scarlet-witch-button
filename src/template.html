@@ -1,0 +1,487 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chaos Magic Button</title>
+<meta name="description" content="A Scarlet Witch button: click it and chaos magic burns it into Wanda's tiara. Real-time WebGL, smoke and effects written as shaders.">
+<meta name="theme-color" content="#f4f2ee">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600&family=Inter:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root { --bg: #f4f2ee; --muted: #9a8f91; --hex: #b30d33; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: radial-gradient(120% 90% at 50% 45%, #fbfaf7 0%, var(--bg) 60%, #e9e5df 100%) fixed, var(--bg);
+    font: 400 14px/1.4 Inter, system-ui, sans-serif;
+    overflow: hidden;
+    -webkit-tap-highlight-color: transparent;
+  }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: manipulation; }
+  .ui { position: fixed; left: 0; right: 0; margin: 0; text-align: center; pointer-events: none; color: var(--muted); }
+  .hint { bottom: 64px; font-size: 12px; letter-spacing: .18em; text-transform: lowercase; transition: opacity .6s ease; }
+  footer.ui { bottom: 18px; font-size: 11px; letter-spacing: .08em; }
+  footer b { display: block; font: 600 13px/1.6 Cinzel, Georgia, serif; letter-spacing: .32em; color: #7d1328; }
+  .sr {
+    position: fixed; left: 50%; top: 50%; width: 1px; height: 1px; padding: 0; margin: 0;
+    overflow: hidden; clip: rect(0 0 0 0); border: 0;
+  }
+  .sr:focus-visible { clip: auto; width: auto; height: auto; transform: translate(-50%, 140px);
+    padding: 6px 12px; background: #fff; color: var(--hex); border-radius: 6px; outline: 2px solid var(--hex); }
+</style>
+</head>
+<body>
+<canvas id="c" aria-hidden="true"></canvas>
+<button class="sr" id="a11y" type="button">Cast chaos magic</button>
+<p class="ui hint" id="hint" aria-live="polite">hover &middot; click</p>
+<footer class="ui"><b>The Scarlet Witch</b>real-time WebGL &middot; smoke written in shaders</footer>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from "three";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
+import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
+import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+
+const MODEL = "/*__MODEL__*/";
+
+const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const coarse = matchMedia("(pointer: coarse)").matches;
+const canvas = document.getElementById("c");
+const hint = document.getElementById("hint");
+const a11y = document.getElementById("a11y");
+
+// ================================================================ renderer / scene
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: "high-performance" });
+renderer.setPixelRatio(Math.min(devicePixelRatio || 1, coarse ? 1.5 : 1.75));
+renderer.setClearColor(0x000000, 0);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.VSMShadowMap;
+
+const scene = new THREE.Scene();
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environmentIntensity = 0.45;
+
+const camera = new THREE.PerspectiveCamera(28, 1, 0.1, 50);
+
+const key = new THREE.DirectionalLight(0xffffff, 2.4);
+key.position.set(-1.6, 2.4, 7);
+key.castShadow = true;
+key.shadow.mapSize.set(1024, 1024);
+Object.assign(key.shadow.camera, { left: -3.2, right: 3.2, top: 3.2, bottom: -3.2, near: 1, far: 16 });
+key.shadow.radius = 9;
+key.shadow.blurSamples = 16;
+key.shadow.bias = -0.0004;
+scene.add(key, new THREE.HemisphereLight(0xffffff, 0xd9cfc9, 0.3));
+// red rim light from behind: the glow on the tiara's edges in the film
+const rimL = new THREE.PointLight(0xff1530, 0, 7, 1.2); rimL.position.set(-2.1, 0.7, -0.9);
+const rimR = new THREE.PointLight(0xff1530, 0, 7, 1.2); rimR.position.set(2.1, 0.7, -0.9);
+scene.add(rimL, rimR);
+
+// wall that only shows shadows -> the soft drop shadow of the trend videos
+const wall = new THREE.Mesh(new THREE.PlaneGeometry(30, 30), new THREE.ShadowMaterial({ opacity: 0.17 }));
+wall.position.z = -0.65;
+wall.receiveShadow = true;
+scene.add(wall);
+
+// ================================================================ shared shader bits
+const U = {
+  uTime: { value: 0 }, uBurn: { value: 0 }, uReveal: { value: 0 }, uGlow: { value: 0 }, uRim: { value: 0 },
+  uBtnInv: { value: new THREE.Matrix4() }, uCrownInv: { value: new THREE.Matrix4() },
+  uBtnHalf: { value: new THREE.Vector3(1, 1, 1) }, uCrownHalf: { value: new THREE.Vector3(1, 1, 1) },
+};
+
+const NOISE = /* glsl */`
+float hx3(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+float vn3(vec3 x){
+  vec3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(hx3(i), hx3(i + vec3(1,0,0)), f.x), mix(hx3(i + vec3(0,1,0)), hx3(i + vec3(1,1,0)), f.x), f.y),
+             mix(mix(hx3(i + vec3(0,0,1)), hx3(i + vec3(1,0,1)), f.x), mix(hx3(i + vec3(0,1,1)), hx3(i + vec3(1,1,1)), f.x), f.y), f.z);
+}
+float fbm3(vec3 p){ float s = 0.0, a = 0.5; for (int i = 0; i < 4; i++) { s += a * vn3(p); p *= 2.03; a *= 0.5; } return s; }
+`;
+const HEADER = /* glsl */`
+uniform float uTime, uBurn, uReveal, uGlow, uRim;
+uniform mat4 uBtnInv, uCrownInv;
+uniform vec3 uBtnHalf, uCrownHalf;
+varying vec3 vWorld;
+${NOISE}
+`;
+// button: burns away from its centre; glowing edge, charred band behind it
+const BURN_CLIP = /* glsl */`
+  vec3 bp = (uBtnInv * vec4(vWorld, 1.0)).xyz / uBtnHalf;
+  float bm = length(bp.xy) + (fbm3(bp * 3.2 + 7.0) - 0.5) * 0.55 - (uBurn * 1.9 - 0.2);
+  if (uBurn > 0.0 && bm < 0.0) discard;
+`;
+const BURN_COLOR = /* glsl */`
+  if (uBurn > 0.0) {
+    diffuseColor.rgb *= mix(1.0, 0.03, 1.0 - smoothstep(0.03, 0.24, bm));
+    totalEmissiveRadiance += vec3(1.0, 0.16, 0.04) * (1.0 - smoothstep(0.0, 0.06, bm)) * 7.0;
+  }
+`;
+// crown: grows out of the centre to both sides behind a red-hot edge
+const REVEAL_CLIP = /* glsl */`
+  vec3 cp = (uCrownInv * vec4(vWorld, 1.0)).xyz / uCrownHalf;
+  float cm = (uReveal * 1.65 - 0.15) - (abs(cp.x) * 0.9 + abs(cp.y) * 0.22 + (fbm3(cp * 4.0 + 3.0) - 0.5) * 0.45);
+  if (cm < 0.0) discard;
+`;
+const REVEAL_COLOR = /* glsl */`
+  totalEmissiveRadiance += vec3(1.0, 0.05, 0.07) * (1.0 - smoothstep(0.0, 0.08, cm)) * 8.0 * step(uReveal, 0.999);
+  float fres = pow(1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0), 3.0);
+  totalEmissiveRadiance += vec3(0.85, 0.02, 0.06) * fres * uRim;
+  totalEmissiveRadiance += diffuseColor.rgb * vec3(1.0, 0.25, 0.25) * uGlow;
+`;
+
+function inject(material, kind) {
+  const burn = kind === "burn";
+  material.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, U);
+    sh.vertexShader = "varying vec3 vWorld;\n" + sh.vertexShader.replace(
+      "#include <project_vertex>", "#include <project_vertex>\n vWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;");
+    sh.fragmentShader = HEADER + sh.fragmentShader
+      .replace("#include <clipping_planes_fragment>", "#include <clipping_planes_fragment>\n" + (burn ? BURN_CLIP : REVEAL_CLIP))
+      .replace("#include <emissivemap_fragment>", "#include <emissivemap_fragment>\n" + (burn ? BURN_COLOR : REVEAL_COLOR));
+  };
+  material.customProgramCacheKey = () => kind + material.type;
+  return material;
+}
+// shadows must burn/grow with the surface too
+const depthFor = (kind) => inject(new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking }), kind);
+
+// ================================================================ button
+const btn = new THREE.Group();
+scene.add(btn);
+const BW = 2.0, BH = 0.58, BD = 0.18;
+const body = new THREE.Mesh(
+  new RoundedBoxGeometry(BW, BH, BD, 6, 0.09),
+  inject(new THREE.MeshPhysicalMaterial({
+    color: 0x5a0614, roughness: 0.36, metalness: 0.1, clearcoat: 1, clearcoatRoughness: 0.06,
+  }), "burn"));
+body.castShadow = true;
+body.customDepthMaterial = depthFor("burn");
+btn.add(body);
+U.uBtnHalf.value.set(BW / 2, BH / 2, BD / 2);
+
+function labelTexture() {
+  const c = document.createElement("canvas");
+  c.width = 1024; c.height = Math.round(1024 * BH / BW);
+  const g = c.getContext("2d");
+  const W = c.width, H = c.height, inset = 22, r = 44;
+  g.strokeStyle = "rgba(255, 228, 220, .38)"; g.lineWidth = 3;
+  g.beginPath(); g.roundRect(inset, inset, W - inset * 2, H - inset * 2, r); g.stroke();
+  g.fillStyle = "#fbece6";
+  g.font = "600 92px Cinzel, Georgia, serif";
+  g.textAlign = "center"; g.textBaseline = "middle";
+  if ("letterSpacing" in g) g.letterSpacing = "14px";
+  g.shadowColor = "rgba(40, 0, 6, .45)"; g.shadowBlur = 8; g.shadowOffsetY = 2;
+  g.fillText("CHAOS MAGIC", W / 2 + 7, H / 2 + 4);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 8;
+  return t;
+}
+const labelMat = inject(new THREE.MeshStandardMaterial({
+  transparent: true, roughness: 0.55, emissive: 0xffffff, emissiveIntensity: 0.18,
+  polygonOffset: true, polygonOffsetFactor: -2,
+}), "burn");
+const label = new THREE.Mesh(new THREE.PlaneGeometry(BW, BH), labelMat);
+label.position.z = BD / 2 + 0.002;
+label.visible = false;
+btn.add(label);
+const fontReady = Promise.race([document.fonts.load("600 92px Cinzel"), new Promise((r) => setTimeout(r, 1500))]);
+fontReady.then(() => {
+  const t = labelTexture();
+  labelMat.map = t; labelMat.emissiveMap = t; labelMat.needsUpdate = true;
+  label.visible = true;
+  wake();
+});
+
+// ================================================================ crown (user's model)
+const crown = new THREE.Group();
+crown.visible = false;
+scene.add(crown);
+// invisible but raycastable click target (three skips raycasts on materials with visible: false)
+const crownHit = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false }));
+let crownReady = false;
+
+const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
+const bytes = Uint8Array.from(atob(MODEL), (ch) => ch.charCodeAt(0));
+loader.parse(bytes.buffer, "", (gltf) => {
+  const orient = new THREE.Group();
+  orient.add(gltf.scene);
+  // model space: front = +X; turn it to face the camera (+Z) with the horns up (+Y)
+  orient.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(
+    new THREE.Vector3(0, 0, 1), new THREE.Vector3(-1, 0, 0), new THREE.Vector3(0, -1, 0)))
+    .premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -Math.PI / 2));
+  orient.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(orient);
+  const size = box.getSize(new THREE.Vector3()), center = box.getCenter(new THREE.Vector3());
+  const s = 2.45 / size.y;
+  orient.position.copy(center).multiplyScalar(-1);
+  const holder = new THREE.Group();
+  holder.add(orient);
+  holder.scale.setScalar(s);
+  crown.add(holder);
+  U.uCrownHalf.value.copy(size).multiplyScalar(s / 2);
+  crownHit.scale.copy(size).multiplyScalar(s * 0.9);
+  crown.add(crownHit);
+
+  gltf.scene.traverse((o) => {
+    if (!o.isMesh) return;
+    const m = o.material;
+    // glossy lacquer over the model's own PBR maps
+    o.material = inject(new THREE.MeshPhysicalMaterial({
+      map: m.map, normalMap: m.normalMap, roughnessMap: m.roughnessMap, metalnessMap: m.metalnessMap,
+      roughness: 1.0, metalness: 0.65, clearcoat: 0.7, clearcoatRoughness: 0.12, envMapIntensity: 0.8,
+    }), "reveal");
+    o.castShadow = true;
+    o.customDepthMaterial = depthFor("reveal");
+  });
+  crownReady = true;
+  renderer.compile(scene, camera);   // no shader-compile hitch on first click
+  wake();
+}, (err) => console.error(err));
+
+// ================================================================ smoke (domain-warped fbm, computed at low res)
+const SMOKE_W = 5.6, SMOKE_H = 3.9, SMOKE_RES = coarse ? 288 : 384;
+const smokeField = /* glsl */`
+uniform float uTime, uSpread, uDensity, uHeat, uHollow, uSeed;
+uniform vec2 uSize;
+varying vec2 vUv;
+float h2(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float n2(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(h2(i), h2(i + vec2(1, 0)), f.x), mix(h2(i + vec2(0, 1)), h2(i + vec2(1, 1)), f.x), f.y); }
+float fbm(vec2 p){ float s = 0.0, a = 0.5; mat2 m = mat2(1.6, 1.2, -1.2, 1.6);
+  for (int i = 0; i < 5; i++) { s += a * n2(p); p = m * p; a *= 0.5; } return s; }
+void main(){
+  vec2 p = (vUv - 0.5) * uSize;
+  float r = length(p * vec2(0.72, 1.0));
+  float t = uTime * 0.16 + uSeed;
+  // the field zooms out as the hex spreads (features flow outward, no centre seam) and drifts upward like rising smoke
+  vec2 q = p * (1.45 - 0.35 * uSpread) + vec2(0.0, -uTime * 0.1) + uSeed;
+  vec2 w1 = vec2(fbm(q + vec2(0.0, t)), fbm(q + vec2(5.2, 1.3) - t));
+  vec2 w2 = vec2(fbm(q + 3.0 * w1 + vec2(1.7, 9.2) + 0.6 * t), fbm(q + 3.0 * w1 + vec2(8.3, 2.8) - 0.5 * t));
+  float f = fbm(q + 3.3 * w2);
+  float outer = 1.0 - smoothstep(uSpread * 0.55, uSpread * 1.0 + 0.15, r + (f - 0.5) * 0.6);
+  float inner = mix(1.0, smoothstep(uSpread * 0.18, uSpread * 0.62, r), uHollow);
+  float dens = smoothstep(0.3, 0.62, f + length(w2) * 0.18) * 1.5 * outer * inner * uDensity;
+  vec3 col = mix(vec3(0.003, 0.0, 0.001), vec3(0.11, 0.0, 0.012), smoothstep(0.25, 0.95, w2.x * f * 1.6) + uHollow * 0.35);
+  col += vec3(0.9, 0.02, 0.04) * pow(clamp(f * length(w1) * 1.1, 0.0, 1.0), 3.0) * uHeat * 1.6;
+  gl_FragColor = vec4(col, clamp(dens, 0.0, 0.97));   // straight alpha: three converts colour to sRGB before blending
+}`;
+const quadVS = "varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }";
+const fsQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
+fsQuad.frustumCulled = false;
+const fsScene = new THREE.Scene(); fsScene.add(fsQuad);
+const fsCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+function smokeLayer(seed, z, order) {
+  const rt = new THREE.WebGLRenderTarget(SMOKE_RES, Math.round(SMOKE_RES * SMOKE_H / SMOKE_W), { type: THREE.HalfFloatType });
+  const field = new THREE.ShaderMaterial({
+    vertexShader: quadVS, fragmentShader: smokeField, depthTest: false, depthWrite: false,
+    uniforms: { uTime: U.uTime, uSpread: { value: 0 }, uDensity: { value: 0 }, uHeat: { value: 1 }, uHollow: { value: 0 },
+                uSeed: { value: seed }, uSize: { value: new THREE.Vector2(SMOKE_W, SMOKE_H) } },
+  });
+  const plane = new THREE.Mesh(new THREE.PlaneGeometry(SMOKE_W, SMOKE_H), new THREE.MeshBasicMaterial({
+    map: rt.texture, transparent: true, depthWrite: false, toneMapped: false,
+  }));
+  plane.position.z = z;
+  plane.renderOrder = order;
+  plane.visible = false;
+  scene.add(plane);
+  return { rt, field, plane, u: field.uniforms };
+}
+const smokeBack = smokeLayer(0.0, -0.45, 1);
+const smokeFront = smokeLayer(11.3, 0.75, 3);
+function renderSmoke(layer) {
+  const on = layer.u.uDensity.value > 0.002;
+  layer.plane.visible = on;
+  if (!on) return;
+  fsQuad.material = layer.field;
+  renderer.setRenderTarget(layer.rt);
+  renderer.render(fsScene, fsCam);
+  renderer.setRenderTarget(null);
+}
+
+// ================================================================ embers (stateless GPU particles)
+const EMBERS = coarse ? 140 : 240;
+const eg = new THREE.BufferGeometry();
+const seeds = new Float32Array(EMBERS * 4);
+for (let i = 0; i < seeds.length; i++) seeds[i] = Math.random();
+eg.setAttribute("position", new THREE.BufferAttribute(new Float32Array(EMBERS * 3), 3));
+eg.setAttribute("seed", new THREE.BufferAttribute(seeds, 4));
+const embers = new THREE.Points(eg, new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, toneMapped: false,
+  uniforms: { uTime: U.uTime, uEmit: { value: 0 }, uSpread: { value: 0 }, uPx: { value: 1 } },
+  vertexShader: /* glsl */`
+    attribute vec4 seed; uniform float uTime, uEmit, uSpread, uPx; varying float vA;
+    void main(){
+      float life = 1.4 + seed.x * 1.8;
+      float age = mod(uTime * 0.9 + seed.y * life, life), k = age / life;
+      float ang = seed.z * 6.2832, rad = (0.25 + seed.w * 0.9) * (0.4 + 0.6 * uSpread);
+      vec3 p = vec3(cos(ang) * rad * 1.5, sin(ang) * rad * 0.7 - 0.2, (seed.x - 0.5) * 1.2);
+      p.y += age * (0.35 + seed.w * 0.4);
+      p.x += sin(age * 2.3 + seed.z * 9.0) * 0.12;
+      vA = uEmit * smoothstep(0.0, 0.12, k) * (1.0 - k);
+      vec4 mv = modelViewMatrix * vec4(p, 1.0);
+      gl_Position = projectionMatrix * mv;
+      gl_PointSize = (3.0 + seed.w * 5.0) * uPx * (6.0 / -mv.z);
+    }`,
+  fragmentShader: /* glsl */`
+    varying float vA;
+    void main(){
+      float d = length(gl_PointCoord - 0.5);
+      float a = smoothstep(0.5, 0.0, d) * vA;
+      gl_FragColor = vec4(mix(vec3(0.75, 0.0, 0.08), vec3(1.0, 0.55, 0.5), smoothstep(0.25, 0.0, d)) * a, a);
+    }`,
+  blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
+}));
+embers.frustumCulled = false;
+embers.renderOrder = 4;
+scene.add(embers);
+
+// ================================================================ timeline
+// one progress value p (0 = button, 1 = crown); every channel is a pure function of it, so undo is the cast in reverse
+const CAST = 2.3;
+const clamp01 = (x) => Math.min(1, Math.max(0, x));
+const seg = (T, a, b) => clamp01((T - a) / (b - a));
+const sm = (x) => x * x * (3 - 2 * x);
+const easeOut = (x) => 1 - Math.pow(1 - x, 3);
+const easeInOut = (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+const backOut = (x) => 1 + 2.2 * Math.pow(x - 1, 3) + 1.2 * Math.pow(x - 1, 2);
+
+let p = 0, dir = 0, hover = 0, hoverTarget = 0;
+const tilt = new THREE.Vector2(), tiltGoal = new THREE.Vector2();
+
+function apply(time) {
+  const T = p * CAST;
+  const burn = easeOut(seg(T, 0.08, 0.95));
+  const spread = 1.05 * easeOut(seg(T, 0.04, 1.2));
+  const settle = sm(seg(T, 1.3, 2.25));
+  const density = sm(seg(T, 0.0, 0.3)) * (1 - 0.5 * settle);
+  const reveal = easeInOut(seg(T, 0.42, 1.75));
+  const press = Math.sin(Math.PI * seg(T, 0.0, 0.22));
+
+  U.uBurn.value = burn;
+  btn.visible = burn < 0.999;
+  btn.position.z = 0.22 * hover * (1 - burn) - 0.07 * press;
+  btn.scale.setScalar(1 + 0.03 * hover - 0.02 * press);
+
+  U.uReveal.value = reveal;
+  crown.visible = crownReady && reveal > 0;
+  const g = backOut(seg(T, 0.42, 1.9));
+  crown.scale.setScalar(0.84 + 0.16 * g);
+  const sway = reduced ? 0 : settle;
+  crown.position.set(0, 0.1 + Math.sin(time * 1.1) * 0.035 * sway, 0.15 + 0.15 * g);
+  crown.rotation.set(0.32 * (1 - g) + Math.sin(time * 0.7) * 0.025 * sway, Math.sin(time * 0.55) * 0.16 * sway, 0);
+  U.uRim.value = 1.0 * reveal * (0.75 + 0.25 * Math.sin(time * 1.7));
+  U.uGlow.value = 0.18 * settle * (0.5 + 0.5 * Math.sin(time * 1.3));
+  rimL.intensity = rimR.intensity = 9 * reveal;
+
+  for (const L of [smokeBack, smokeFront]) {
+    L.u.uSpread.value = spread;
+    L.u.uHeat.value = 1 - 0.75 * settle;
+    L.u.uHollow.value = settle;
+  }
+  smokeBack.u.uDensity.value = density;
+  smokeFront.u.uDensity.value = density * (0.62 - 0.5 * settle);
+  embers.material.uniforms.uEmit.value = reduced ? 0 : sm(seg(T, 0.05, 0.4)) * (1 - 0.55 * settle);
+  embers.material.uniforms.uSpread.value = spread / 1.05;
+}
+
+function toggle() {
+  if (dir > 0) return;                                   // let a cast finish
+  if (p === 0 || dir < 0) {
+    dir = 1; hint.textContent = "click the crown to undo"; a11y.textContent = "Undo the hex";
+  } else {
+    dir = -1; hint.textContent = "again?"; a11y.textContent = "Cast chaos magic";
+  }
+  if (reduced) { p = dir > 0 ? 1 : 0; dir = 0; }
+  hint.style.opacity = 0;
+  wake();
+}
+
+// ================================================================ input
+const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+function hits(e) {
+  const r = canvas.getBoundingClientRect();
+  ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  const crownMode = p > 0.5;
+  if (crownMode ? !crown.visible : !btn.visible) return false;
+  return ray.intersectObject(crownMode ? crownHit : body, false).length > 0;
+}
+canvas.addEventListener("pointermove", (e) => {
+  const over = hits(e);
+  canvas.style.cursor = over ? "pointer" : "";
+  if (e.pointerType === "mouse") {
+    hoverTarget = over && p === 0 ? 1 : 0;
+    tiltGoal.set((e.clientX / innerWidth - 0.5) * 2, (e.clientY / innerHeight - 0.5) * 2);
+  }
+  wake();
+});
+canvas.addEventListener("pointerleave", () => { hoverTarget = 0; tiltGoal.set(0, 0); wake(); });
+canvas.addEventListener("click", (e) => { if (hits(e)) toggle(); });
+a11y.addEventListener("click", toggle);
+
+// ================================================================ layout
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  // fit a 3.4 x 3.4 content box (crown + smoke), aimed a little low so the caption sits under the crown
+  const half = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
+  const dist = Math.max(1.7 / half, 1.7 / (half * camera.aspect)) + 0.4;
+  camera.position.set(0, -0.2, dist);
+  camera.lookAt(0, -0.2, 0);
+  camera.updateProjectionMatrix();
+  embers.material.uniforms.uPx.value = renderer.getPixelRatio() * h / 900;
+  wake();
+}
+addEventListener("resize", resize);
+
+// ================================================================ loop (sleeps when nothing changes)
+const clock = new THREE.Clock();
+let running = false;
+function wake() { if (!running) { running = true; clock.getDelta(); requestAnimationFrame(loop); } }
+function loop() {
+  const dt = Math.min(clock.getDelta(), 0.05);
+  U.uTime.value += dt;
+  const time = U.uTime.value;
+
+  const waiting = dir > 0 && !crownReady && p * CAST > 0.4;     // hold the cast until the model is parsed
+  if (dir !== 0 && !waiting) {
+    p = clamp01(p + dir * dt / CAST * (dir < 0 ? 1.35 : 1));
+    if (p === 0 || p === 1) { dir = 0; hint.style.opacity = 1; }
+  }
+  hover += (hoverTarget - hover) * Math.min(1, dt * 9);
+  tilt.lerp(tiltGoal, Math.min(1, dt * 4));
+  scene.rotation.set(tilt.y * 0.035, tilt.x * 0.06, 0);
+
+  apply(time);
+  scene.updateMatrixWorld();
+  U.uBtnInv.value.copy(body.matrixWorld).invert();
+  U.uCrownInv.value.copy(crown.matrixWorld).invert();
+
+  renderSmoke(smokeBack);
+  renderSmoke(smokeFront);
+  renderer.render(scene, camera);
+
+  const animating = dir !== 0 || p > 0 || Math.abs(hover - hoverTarget) > 0.001 || tilt.distanceTo(tiltGoal) > 0.001;
+  if (animating) requestAnimationFrame(loop); else running = false;
+}
+resize();
+</script>
+</body>
+</html>
