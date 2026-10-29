@@ -77,10 +77,10 @@ const camera = new THREE.PerspectiveCamera(28, 1, 0.1, 50);
 const key = new THREE.DirectionalLight(0xffffff, 2.4);
 key.position.set(-1.6, 2.4, 7);
 key.castShadow = true;
-key.shadow.mapSize.set(1024, 1024);
+key.shadow.mapSize.set(512, 512);
 Object.assign(key.shadow.camera, { left: -3.2, right: 3.2, top: 3.2, bottom: -3.2, near: 1, far: 16 });
-key.shadow.radius = 9;
-key.shadow.blurSamples = 16;
+key.shadow.radius = 5;
+key.shadow.blurSamples = 8;
 key.shadow.bias = -0.0004;
 scene.add(key, new THREE.HemisphereLight(0xffffff, 0xd9cfc9, 0.3));
 // red rim light from behind: the glow on the tiara's edges in the film
@@ -121,7 +121,7 @@ ${NOISE}
 const BURN_CLIP = /* glsl */`
   vec3 bp = (uBtnInv * vec4(vWorld, 1.0)).xyz / uBtnHalf;
   float bm = length(bp.xy) + (fbm3(bp * 3.2 + 7.0) - 0.5) * 0.55 - (uBurn * 1.9 - 0.2);
-  if (uBurn > 0.0 && bm < 0.0) discard;
+  if (uBurn > 0.0 && bm < -0.04) discard;
 `;
 const BURN_COLOR = /* glsl */`
   if (uBurn > 0.0) {
@@ -129,16 +129,18 @@ const BURN_COLOR = /* glsl */`
     diffuseColor.rgb *= mix(1.0, 0.03, charB);
     totalEmissiveRadiance *= mix(1.0, 0.04, charB);
     totalEmissiveRadiance += vec3(1.0, 0.16, 0.04) * (1.0 - smoothstep(0.0, 0.06, bm)) * 7.0;
+    diffuseColor.a *= smoothstep(-0.04, 0.012, bm);
   }
 `;
 // crown: grows out of the centre to both sides behind a red-hot edge
 const REVEAL_CLIP = /* glsl */`
   vec3 cp = (uCrownInv * vec4(vWorld, 1.0)).xyz / uCrownHalf;
   float cm = (uReveal * 1.65 - 0.15) - (abs(cp.x) * 0.9 + abs(cp.y) * 0.22 + (fbm3(cp * 4.0 + 3.0) - 0.5) * 0.45);
-  if (cm < 0.0) discard;
+  if (cm < -0.03) discard;
 `;
 const REVEAL_COLOR = /* glsl */`
   totalEmissiveRadiance += vec3(1.0, 0.05, 0.07) * (1.0 - smoothstep(0.0, 0.08, cm)) * 8.0 * step(uReveal, 0.999);
+  diffuseColor.a = smoothstep(-0.03, 0.01, cm);   // alpha-to-coverage turns this into an anti-aliased edge
   float fres = pow(1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0), 3.0);
   totalEmissiveRadiance += vec3(0.85, 0.02, 0.06) * fres * uRim;
   totalEmissiveRadiance += diffuseColor.rgb * vec3(1.0, 0.25, 0.25) * uGlow;
@@ -327,17 +329,25 @@ loader.parse(bytes.buffer, "", (gltf) => {
     o.material = inject(new THREE.MeshPhysicalMaterial({
       map: m.map, normalMap: m.normalMap, roughnessMap: m.roughnessMap, metalnessMap: m.metalnessMap,
       roughness: 1.0, metalness: 0.65, clearcoat: 0.7, clearcoatRoughness: 0.12, envMapIntensity: 0.8,
+      alphaToCoverage: true,
     }), "reveal");
     o.castShadow = true;
     o.customDepthMaterial = depthFor("reveal");
   });
   crownReady = true;
-  renderer.compile(scene, camera);   // no shader-compile hitch on first click
+  // compile skips hidden objects, and shadow programs only build during a shadow pass: render one invisible frame
+  crown.visible = smokeBack.plane.visible = smokeFront.plane.visible = true;
+  U.uReveal.value = 0;
+  for (const L of [smokeBack, smokeFront]) { fsQuad.material = L.field; renderer.setRenderTarget(L.rt); renderer.render(fsScene, fsCam); }
+  renderer.setRenderTarget(null);
+  scene.updateMatrixWorld();
+  renderer.render(scene, camera);
+  crown.visible = smokeBack.plane.visible = smokeFront.plane.visible = false;
   wake();
 }, (err) => console.error(err));
 
 // ================================================================ smoke (domain-warped fbm, computed at low res)
-const SMOKE_W = 5.6, SMOKE_H = 3.9, SMOKE_RES = coarse ? 288 : 384;
+const SMOKE_W = 5.6, SMOKE_H = 3.9, SMOKE_RES = coarse ? 192 : 256;
 const smokeField = /* glsl */`
 uniform float uTime, uSpread, uDensity, uHeat, uHollow, uSeed;
 uniform vec2 uSize;
@@ -346,7 +356,7 @@ float h2(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); r
 float n2(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
   return mix(mix(h2(i), h2(i + vec2(1, 0)), f.x), mix(h2(i + vec2(0, 1)), h2(i + vec2(1, 1)), f.x), f.y); }
 float fbm(vec2 p){ float s = 0.0, a = 0.5; mat2 m = mat2(1.6, 1.2, -1.2, 1.6);
-  for (int i = 0; i < 5; i++) { s += a * n2(p); p = m * p; a *= 0.5; } return s; }
+  for (int i = 0; i < 4; i++) { s += a * n2(p); p = m * p; a *= 0.5; } return s; }
 void main(){
   vec2 p = (vUv - 0.5) * uSize;
   float r = length(p * vec2(0.72, 1.0));
@@ -435,66 +445,102 @@ embers.renderOrder = 4;
 scene.add(embers);
 
 // ================================================================ timeline
-// one progress value p (0 = button, 1 = crown); every channel is a pure function of it, so undo is the cast in reverse
-const CAST = 2.3;
+// cast: progress p (0 = button, 1 = crown). A click mid-cast rewinds it.
+// undo: its own sequence u (0..1) - the smoke closes in, the crown burns away from its tips, the button re-forms.
+const CAST = 2.3, UNDO = 1.75;
 const clamp01 = (x) => Math.min(1, Math.max(0, x));
 const seg = (T, a, b) => clamp01((T - a) / (b - a));
 const sm = (x) => x * x * (3 - 2 * x);
+const easeIn = (x) => x * x * x;
 const easeOut = (x) => 1 - Math.pow(1 - x, 3);
 const easeInOut = (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
 const backOut = (x) => 1 + 2.2 * Math.pow(x - 1, 3) + 1.2 * Math.pow(x - 1, 2);
 
-let p = 0, dir = 0, hover = 0, hoverTarget = 0;
+let mode = "rest";                 // rest | cast | rewind | crown | undo
+let p = 0, u = 0, hover = 0, hoverTarget = 0;
 const tilt = new THREE.Vector2(), tiltGoal = new THREE.Vector2();
 
 function apply(time) {
-  const T = p * CAST;
-  const burn = easeOut(seg(T, 0.08, 0.95));
-  const spread = 1.05 * easeOut(seg(T, 0.04, 1.2));
-  const settle = sm(seg(T, 1.3, 2.25));
-  const density = sm(seg(T, 0.0, 0.3)) * (1 - 0.5 * settle);
-  const reveal = easeInOut(seg(T, 0.42, 1.75));
-  const press = Math.sin(Math.PI * seg(T, 0.0, 0.22));
+  let burn, spread, settle, density, reveal, press, grow, flare = 0, emit, lift;
+  if (mode !== "undo") {
+    const T = p * CAST;
+    press = Math.sin(Math.PI * seg(T, 0.0, 0.2));
+    burn = sm(seg(T, 0.1, 0.95));
+    lift = sm(seg(T, 0.05, 0.6));                        // the button rises into the burn instead of sitting flat
+    spread = 1.05 * easeOut(seg(T, 0.04, 1.2));
+    settle = sm(seg(T, 1.3, 2.25));
+    density = sm(seg(T, 0.0, 0.3)) * (1 - 0.5 * settle);
+    reveal = easeInOut(seg(T, 0.42, 1.75));
+    grow = backOut(seg(T, 0.42, 1.9));
+    emit = sm(seg(T, 0.05, 0.35)) * (1 - 0.55 * settle) + 0.8 * Math.sin(Math.PI * seg(T, 0.1, 0.95));
+  } else {
+    const T = u * UNDO;
+    press = 0; lift = 1 - sm(seg(T, 1.0, 1.6));
+    flare = Math.sin(Math.PI * seg(T, 0.0, 0.7));        // smoke closes in, crown flares
+    settle = 1 - sm(seg(T, 0.0, 0.45));
+    const collapse = easeIn(seg(T, 0.7, 1.5));
+    spread = 1.05 * (1 + 0.12 * sm(seg(T, 0.0, 0.4))) * (1 - collapse);
+    density = (0.5 + 0.5 * sm(seg(T, 0.0, 0.35))) * (1 - sm(seg(T, 1.2, 1.7)));
+    reveal = 1 - easeInOut(seg(T, 0.2, 1.05));           // tips go first, the centre last
+    grow = 1 - 0.12 * sm(seg(T, 0.2, 1.05));
+    burn = 1 - easeOut(seg(T, 0.85, 1.55));              // button re-forms from its edges inward
+    emit = 0.6 * flare + 0.5 * Math.sin(Math.PI * seg(T, 0.85, 1.55));
+  }
 
   U.uBurn.value = burn;
   btn.visible = burn < 0.999;
-  btn.position.z = 0.22 * hover * (1 - burn) - 0.07 * press;
-  btn.scale.setScalar(1 + 0.03 * hover - 0.02 * press);
-  labelMat.emissiveIntensity = 1 + 0.12 * hover;
-  glowMat.opacity = Math.min(1, hover * 0.9 + press) * (1 - burn);
+  btn.position.z = 0.22 * hover * (1 - burn) - 0.07 * press + 0.12 * lift * (1 - burn);
+  btn.scale.setScalar(1 + 0.03 * hover - 0.02 * press + 0.04 * lift * burn);
+  labelMat.emissiveIntensity = 1 + 0.12 * hover + 0.6 * press;
+  glowMat.opacity = Math.min(1, hover * 0.9 + press * 1.2) * (1 - burn);
 
   U.uReveal.value = reveal;
   crown.visible = crownReady && reveal > 0;
-  const g = backOut(seg(T, 0.42, 1.9));
-  crown.scale.setScalar(0.84 + 0.16 * g);
+  crown.scale.setScalar(0.84 + 0.16 * grow);
   const sway = reduced ? 0 : settle;
-  crown.position.set(0, 0.1 + Math.sin(time * 1.1) * 0.035 * sway, 0.15 + 0.15 * g);
-  crown.rotation.set(0.32 * (1 - g) + Math.sin(time * 0.7) * 0.025 * sway, Math.sin(time * 0.55) * 0.16 * sway, 0);
-  U.uRim.value = 1.0 * reveal * (0.75 + 0.25 * Math.sin(time * 1.7));
-  U.uGlow.value = 0.18 * settle * (0.5 + 0.5 * Math.sin(time * 1.3));
-  rimL.intensity = rimR.intensity = 9 * reveal;
+  crown.position.set(0, 0.1 + Math.sin(time * 1.1) * 0.035 * sway, 0.15 + 0.15 * grow);
+  crown.rotation.set(0.32 * (1 - grow) + Math.sin(time * 0.7) * 0.025 * sway, Math.sin(time * 0.55) * 0.16 * sway, 0);
+  U.uRim.value = reveal * (0.75 + 0.25 * Math.sin(time * 1.7) + 1.8 * flare);
+  U.uGlow.value = 0.18 * settle * (0.5 + 0.5 * Math.sin(time * 1.3)) + 0.25 * flare;
+  rimL.intensity = rimR.intensity = 9 * reveal * (1 + flare);
 
   for (const L of [smokeBack, smokeFront]) {
     L.u.uSpread.value = spread;
-    L.u.uHeat.value = 1 - 0.75 * settle;
+    L.u.uHeat.value = 1 - 0.75 * settle + 0.6 * flare;
     L.u.uHollow.value = settle;
   }
   smokeBack.u.uDensity.value = density;
   smokeFront.u.uDensity.value = density * (0.62 - 0.5 * settle);
-  embers.material.uniforms.uEmit.value = reduced ? 0 : sm(seg(T, 0.05, 0.4)) * (1 - 0.55 * settle);
-  embers.material.uniforms.uSpread.value = spread / 1.05;
+  embers.material.uniforms.uEmit.value = reduced ? 0 : Math.min(1.4, emit);
+  embers.material.uniforms.uSpread.value = Math.max(spread / 1.05, 0.35 * (1 - burn) + burn * 0.6);
 }
 
 function toggle() {
-  if (dir > 0) return;                                   // let a cast finish
-  if (p === 0 || dir < 0) {
-    dir = 1; hint.textContent = "click the crown to undo"; a11y.textContent = "Undo the hex";
+  if (mode === "undo") return;
+  if (mode === "rest" || mode === "rewind") {
+    mode = "cast"; hint.textContent = "click the crown to undo"; a11y.textContent = "Undo the hex";
+  } else if (mode === "cast") {
+    mode = "rewind"; hint.textContent = "hover · click"; a11y.textContent = "Cast chaos magic";
   } else {
-    dir = -1; hint.textContent = "again?"; a11y.textContent = "Cast chaos magic";
+    mode = "undo"; u = 0; hint.textContent = "again?"; a11y.textContent = "Cast chaos magic";
   }
-  if (reduced) { p = dir > 0 ? 1 : 0; dir = 0; }
+  if (reduced) { p = mode === "cast" ? 1 : 0; u = 0; mode = p ? "crown" : "rest"; }
   hint.style.opacity = 0;
   wake();
+}
+
+function advance(dt) {
+  if (mode === "cast") {
+    if (!crownReady && p * CAST > 0.4) return;            // hold until the model is parsed
+    p = clamp01(p + dt / CAST);
+    if (p === 1) { mode = "crown"; hint.style.opacity = 1; }
+  } else if (mode === "rewind") {
+    p = clamp01(p - dt / CAST * 1.6);
+    if (p === 0) { mode = "rest"; hint.style.opacity = 1; }
+  } else if (mode === "undo") {
+    u = clamp01(u + dt / UNDO);
+    if (u === 1) { mode = "rest"; p = 0; u = 0; hint.style.opacity = 1; }
+  }
 }
 
 // ================================================================ input
@@ -503,7 +549,7 @@ function hits(e) {
   const r = canvas.getBoundingClientRect();
   ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
   ray.setFromCamera(ndc, camera);
-  const crownMode = p > 0.5;
+  const crownMode = mode === "crown" || (mode === "cast" && p > 0.5);
   if (crownMode ? !crown.visible : !btn.visible) return false;
   return ray.intersectObject(crownMode ? crownHit : body, false).length > 0;
 }
@@ -511,7 +557,7 @@ canvas.addEventListener("pointermove", (e) => {
   const over = hits(e);
   canvas.style.cursor = over ? "pointer" : "";
   if (e.pointerType === "mouse") {
-    hoverTarget = over && p === 0 ? 1 : 0;
+    hoverTarget = over && mode === "rest" ? 1 : 0;
     tiltGoal.set((e.clientX / innerWidth - 0.5) * 2, (e.clientY / innerHeight - 0.5) * 2);
   }
   wake();
@@ -540,17 +586,27 @@ addEventListener("resize", resize);
 // ================================================================ loop (sleeps when nothing changes)
 const clock = new THREE.Clock();
 let running = false;
+// dynamic resolution: drop the pixel ratio when frames run long, win it back when there's headroom
+const MAX_DPR = Math.min(devicePixelRatio || 1, coarse ? 1.5 : 1.75);
+let dpr = MAX_DPR, frameAvg = 1 / 60, slowFor = 0, fastFor = 0;
+function adaptResolution(raw) {
+  frameAvg += (raw - frameAvg) * 0.1;
+  slowFor = frameAvg > 1 / 45 ? slowFor + raw : 0;
+  fastFor = frameAvg < 1 / 57 ? fastFor + raw : 0;
+  let next = dpr;
+  if (slowFor > 0.5 && dpr > 0.75) next = Math.max(0.75, dpr - 0.25);
+  else if (fastFor > 3 && dpr < MAX_DPR) next = Math.min(MAX_DPR, dpr + 0.25);
+  if (next !== dpr) { dpr = next; slowFor = fastFor = 0; renderer.setPixelRatio(dpr); resize(); }
+}
 function wake() { if (!running) { running = true; clock.getDelta(); requestAnimationFrame(loop); } }
 function loop() {
-  const dt = Math.min(clock.getDelta(), 0.05);
+  const raw = clock.getDelta();
+  const dt = Math.min(raw, 1 / 20);
+  if (mode !== "rest" && mode !== "crown") adaptResolution(raw);
   U.uTime.value += dt;
   const time = U.uTime.value;
 
-  const waiting = dir > 0 && !crownReady && p * CAST > 0.4;     // hold the cast until the model is parsed
-  if (dir !== 0 && !waiting) {
-    p = clamp01(p + dir * dt / CAST * (dir < 0 ? 1.35 : 1));
-    if (p === 0 || p === 1) { dir = 0; hint.style.opacity = 1; }
-  }
+  advance(dt);
   hover += (hoverTarget - hover) * Math.min(1, dt * 9);
   tilt.lerp(tiltGoal, Math.min(1, dt * 4));
   scene.rotation.set(tilt.y * 0.035, tilt.x * 0.06, 0);
@@ -565,7 +621,7 @@ function loop() {
   renderSmoke(smokeFront);
   renderer.render(scene, camera);
 
-  const animating = dir !== 0 || p > 0 || hover > 0.01 || Math.abs(hover - hoverTarget) > 0.001 || tilt.distanceTo(tiltGoal) > 0.001;
+  const animating = mode !== "rest" || hover > 0.01 || Math.abs(hover - hoverTarget) > 0.001 || tilt.distanceTo(tiltGoal) > 0.001;
   if (animating) requestAnimationFrame(loop); else running = false;
 }
 resize();
