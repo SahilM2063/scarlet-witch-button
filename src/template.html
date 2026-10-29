@@ -35,7 +35,7 @@
 <body>
 <canvas id="c" aria-hidden="true"></canvas>
 <button class="sr" id="a11y" type="button">Cast chaos magic</button>
-<p class="ui hint" id="hint" aria-live="polite">hover &middot; click</p>
+<p class="ui hint" id="hint" aria-live="polite">click</p>
 <footer class="ui"><b>The Scarlet Witch</b>real-time WebGL &middot; smoke written in shaders</footer>
 
 <script type="importmap">
@@ -181,7 +181,7 @@ body.visible = false;
 btn.add(body);
 U.uBtnHalf.value.set(LW / 2, LH / 2, 0.05);
 
-// inner-glow streaks along the top and bottom rails, lit on hover
+// inner-glow streaks along the top and bottom rails, flashed on the press
 const glowMat = new THREE.MeshBasicMaterial({
   transparent: true, opacity: 0, depthWrite: false, toneMapped: false, blending: THREE.AdditiveBlending,
 });
@@ -192,66 +192,6 @@ const glows = [-1, 1].map((side) => {
   btn.add(m);
   return m;
 });
-
-// hover: two small hex wisps with fading tails wander around the frame in opposite directions
-const TRAIL = 72, WISPS = 2;
-const wispGeo = new THREE.BufferGeometry();
-const wPos = new Float32Array(TRAIL * WISPS * 3), wFade = new Float32Array(TRAIL * WISPS);
-for (let w = 0; w < WISPS; w++) for (let i = 0; i < TRAIL; i++) wFade[w * TRAIL + i] = Math.pow(1 - i / TRAIL, 1.7);
-wispGeo.setAttribute("position", new THREE.BufferAttribute(wPos, 3));
-wispGeo.setAttribute("fade", new THREE.BufferAttribute(wFade, 1));
-const wispMat = new THREE.ShaderMaterial({
-  transparent: true, depthWrite: false, toneMapped: false,
-  blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
-  uniforms: { uAlpha: { value: 0 }, uPx: { value: 1 } },
-  vertexShader: /* glsl */`
-    attribute float fade; uniform float uPx; varying float vF;
-    void main(){
-      vF = fade;
-      vec4 mv = modelViewMatrix * vec4(position, 1.0);
-      gl_Position = projectionMatrix * mv;
-      gl_PointSize = (4.0 + 12.0 * fade + 14.0 * pow(fade, 12.0)) * uPx * (6.0 / -mv.z);   // bright head, tapering tail
-    }`,
-  fragmentShader: /* glsl */`
-    uniform float uAlpha; varying float vF;
-    void main(){
-      float d = length(gl_PointCoord - 0.5);
-      float a = min(1.0, pow(smoothstep(0.5, 0.0, d), 1.6) * (0.35 + 0.9 * vF) * vF * uAlpha);
-      vec3 c = mix(vec3(0.86, 0.0, 0.08), vec3(1.0, 0.55, 0.6), smoothstep(0.18, 0.0, d) * pow(vF, 4.0));
-      gl_FragColor = vec4(c * a, a);   // premultiplied
-    }`,
-});
-const wispPts = new THREE.Points(wispGeo, wispMat);
-wispPts.frustumCulled = false;
-wispPts.renderOrder = 5;
-wispPts.visible = false;
-btn.add(wispPts);
-
-// rounded-rectangle-ish loop just outside the frame (superellipse), with a little wobble
-function framePoint(u, t, k, out) {
-  const a = u * Math.PI * 2, c = Math.cos(a), s = Math.sin(a);
-  const wob = 1 + 0.05 * Math.sin(a * 6 + t * 3.1 + k) + 0.03 * Math.sin(a * 11 - t * 4.3 + k);
-  out[0] = Math.sign(c) * Math.pow(Math.abs(c), 0.22) * LW * 0.5 * 1.015 * wob;
-  out[1] = Math.sign(s) * Math.pow(Math.abs(s), 0.22) * LH * 0.5 * 1.16 * wob;
-}
-let wispPhase = 0;
-const wTmp = [0, 0];
-function updateWisps(dt, time, amount) {
-  wispMat.uniforms.uAlpha.value = amount;
-  wispPts.visible = amount > 0.01;
-  if (!wispPts.visible) return;
-  wispPhase += dt * 0.38;
-  for (let w = 0; w < WISPS; w++) {
-    const dir = w ? -1 : 1;
-    for (let i = 0; i < TRAIL; i++) {
-      const u = dir * (wispPhase - i * 0.0017) + w * 0.5;
-      framePoint(((u % 1) + 1) % 1, time - i * 0.007, w * 2.3, wTmp);
-      const j = (w * TRAIL + i) * 3;
-      wPos[j] = wTmp[0]; wPos[j + 1] = wTmp[1]; wPos[j + 2] = 0.03;
-    }
-  }
-  wispGeo.attributes.position.needsUpdate = true;
-}
 
 async function buildButton() {
   const [img, glowImg] = await Promise.all([loadImg(BUTTON_IMG), loadImg(GLOW_IMG),
@@ -312,7 +252,7 @@ loader.parse(bytes.buffer, "", (gltf) => {
   orient.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(orient);
   const size = box.getSize(new THREE.Vector3()), center = box.getCenter(new THREE.Vector3());
-  const s = 2.45 / size.y;
+  const s = 2.0 / size.y;   // crown height in scene units
   orient.position.copy(center).multiplyScalar(-1);
   const holder = new THREE.Group();
   holder.add(orient);
@@ -457,7 +397,7 @@ const easeInOut = (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) 
 const backOut = (x) => 1 + 2.2 * Math.pow(x - 1, 3) + 1.2 * Math.pow(x - 1, 2);
 
 let mode = "rest";                 // rest | cast | rewind | crown | undo
-let p = 0, u = 0, hover = 0, hoverTarget = 0;
+let p = 0, u = 0;
 const tilt = new THREE.Vector2(), tiltGoal = new THREE.Vector2();
 
 function apply(time) {
@@ -489,10 +429,10 @@ function apply(time) {
 
   U.uBurn.value = burn;
   btn.visible = burn < 0.999;
-  btn.position.z = 0.22 * hover * (1 - burn) - 0.07 * press + 0.12 * lift * (1 - burn);
-  btn.scale.setScalar(1 + 0.03 * hover - 0.02 * press + 0.04 * lift * burn);
-  labelMat.emissiveIntensity = 1 + 0.12 * hover + 0.6 * press;
-  glowMat.opacity = Math.min(1, hover * 0.9 + press * 1.2) * (1 - burn);
+  btn.position.z = -0.07 * press + 0.12 * lift * (1 - burn);
+  btn.scale.setScalar(1 - 0.02 * press + 0.04 * lift * burn);
+  labelMat.emissiveIntensity = 1 + 0.6 * press;
+  glowMat.opacity = Math.min(1, press * 1.2) * (1 - burn);
 
   U.uReveal.value = reveal;
   crown.visible = crownReady && reveal > 0;
@@ -520,7 +460,7 @@ function toggle() {
   if (mode === "rest" || mode === "rewind") {
     mode = "cast"; hint.textContent = "click the crown to undo"; a11y.textContent = "Undo the hex";
   } else if (mode === "cast") {
-    mode = "rewind"; hint.textContent = "hover · click"; a11y.textContent = "Cast chaos magic";
+    mode = "rewind"; hint.textContent = "click"; a11y.textContent = "Cast chaos magic";
   } else {
     mode = "undo"; u = 0; hint.textContent = "again?"; a11y.textContent = "Cast chaos magic";
   }
@@ -557,12 +497,11 @@ canvas.addEventListener("pointermove", (e) => {
   const over = hits(e);
   canvas.style.cursor = over ? "pointer" : "";
   if (e.pointerType === "mouse") {
-    hoverTarget = over && mode === "rest" ? 1 : 0;
     tiltGoal.set((e.clientX / innerWidth - 0.5) * 2, (e.clientY / innerHeight - 0.5) * 2);
   }
   wake();
 });
-canvas.addEventListener("pointerleave", () => { hoverTarget = 0; tiltGoal.set(0, 0); wake(); });
+canvas.addEventListener("pointerleave", () => { tiltGoal.set(0, 0); wake(); });
 canvas.addEventListener("click", (e) => { if (hits(e)) toggle(); });
 a11y.addEventListener("click", toggle);
 
@@ -578,7 +517,6 @@ function resize() {
   camera.lookAt(0, -0.2, 0);
   camera.updateProjectionMatrix();
   embers.material.uniforms.uPx.value = renderer.getPixelRatio() * h / 900;
-  wispMat.uniforms.uPx.value = embers.material.uniforms.uPx.value;
   wake();
 }
 addEventListener("resize", resize);
@@ -607,12 +545,10 @@ function loop() {
   const time = U.uTime.value;
 
   advance(dt);
-  hover += (hoverTarget - hover) * Math.min(1, dt * 9);
   tilt.lerp(tiltGoal, Math.min(1, dt * 4));
   scene.rotation.set(tilt.y * 0.035, tilt.x * 0.06, 0);
 
   apply(time);
-  updateWisps(dt, time, hover * (1 - U.uBurn.value));
   scene.updateMatrixWorld();
   U.uBtnInv.value.copy(body.matrixWorld).invert();
   U.uCrownInv.value.copy(crown.matrixWorld).invert();
@@ -621,7 +557,7 @@ function loop() {
   renderSmoke(smokeFront);
   renderer.render(scene, camera);
 
-  const animating = mode !== "rest" || hover > 0.01 || Math.abs(hover - hoverTarget) > 0.001 || tilt.distanceTo(tiltGoal) > 0.001;
+  const animating = mode !== "rest" || tilt.distanceTo(tiltGoal) > 0.001;
   if (animating) requestAnimationFrame(loop); else running = false;
 }
 resize();
