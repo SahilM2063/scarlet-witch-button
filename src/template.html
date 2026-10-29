@@ -23,10 +23,7 @@
   .ui { position: fixed; left: 0; right: 0; margin: 0; text-align: center; pointer-events: none; color: var(--muted); }
   .hint { bottom: 64px; font-size: 12px; letter-spacing: .18em; text-transform: lowercase; transition: opacity .6s ease; }
   footer.ui { bottom: 18px; font-size: 11px; letter-spacing: .08em; }
-  footer b { display: block; font: 600 13px/1.6 Cinzel, Georgia, serif; letter-spacing: .32em; color: #7d1328; transition: color .8s ease; }
-  .ui { transition: color .8s ease, opacity .6s ease; }
-  body.dark .ui { color: #b98f95; }
-  body.dark footer b { color: #ff5468; }
+  footer b { display: block; font: 600 13px/1.6 Cinzel, Georgia, serif; letter-spacing: .32em; color: #7d1328; }
   .sr {
     position: fixed; left: 50%; top: 50%; width: 1px; height: 1px; padding: 0; margin: 0;
     overflow: hidden; clip: rect(0 0 0 0); border: 0;
@@ -194,6 +191,66 @@ const glows = [-1, 1].map((side) => {
   return m;
 });
 
+// hover: two small hex wisps with fading tails wander around the frame in opposite directions
+const TRAIL = 72, WISPS = 2;
+const wispGeo = new THREE.BufferGeometry();
+const wPos = new Float32Array(TRAIL * WISPS * 3), wFade = new Float32Array(TRAIL * WISPS);
+for (let w = 0; w < WISPS; w++) for (let i = 0; i < TRAIL; i++) wFade[w * TRAIL + i] = Math.pow(1 - i / TRAIL, 1.7);
+wispGeo.setAttribute("position", new THREE.BufferAttribute(wPos, 3));
+wispGeo.setAttribute("fade", new THREE.BufferAttribute(wFade, 1));
+const wispMat = new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, toneMapped: false,
+  blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
+  uniforms: { uAlpha: { value: 0 }, uPx: { value: 1 } },
+  vertexShader: /* glsl */`
+    attribute float fade; uniform float uPx; varying float vF;
+    void main(){
+      vF = fade;
+      vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      gl_Position = projectionMatrix * mv;
+      gl_PointSize = (4.0 + 12.0 * fade + 14.0 * pow(fade, 12.0)) * uPx * (6.0 / -mv.z);   // bright head, tapering tail
+    }`,
+  fragmentShader: /* glsl */`
+    uniform float uAlpha; varying float vF;
+    void main(){
+      float d = length(gl_PointCoord - 0.5);
+      float a = min(1.0, pow(smoothstep(0.5, 0.0, d), 1.6) * (0.35 + 0.9 * vF) * vF * uAlpha);
+      vec3 c = mix(vec3(0.86, 0.0, 0.08), vec3(1.0, 0.55, 0.6), smoothstep(0.18, 0.0, d) * pow(vF, 4.0));
+      gl_FragColor = vec4(c * a, a);   // premultiplied
+    }`,
+});
+const wispPts = new THREE.Points(wispGeo, wispMat);
+wispPts.frustumCulled = false;
+wispPts.renderOrder = 5;
+wispPts.visible = false;
+btn.add(wispPts);
+
+// rounded-rectangle-ish loop just outside the frame (superellipse), with a little wobble
+function framePoint(u, t, k, out) {
+  const a = u * Math.PI * 2, c = Math.cos(a), s = Math.sin(a);
+  const wob = 1 + 0.05 * Math.sin(a * 6 + t * 3.1 + k) + 0.03 * Math.sin(a * 11 - t * 4.3 + k);
+  out[0] = Math.sign(c) * Math.pow(Math.abs(c), 0.22) * LW * 0.5 * 1.015 * wob;
+  out[1] = Math.sign(s) * Math.pow(Math.abs(s), 0.22) * LH * 0.5 * 1.16 * wob;
+}
+let wispPhase = 0;
+const wTmp = [0, 0];
+function updateWisps(dt, time, amount) {
+  wispMat.uniforms.uAlpha.value = amount;
+  wispPts.visible = amount > 0.01;
+  if (!wispPts.visible) return;
+  wispPhase += dt * 0.38;
+  for (let w = 0; w < WISPS; w++) {
+    const dir = w ? -1 : 1;
+    for (let i = 0; i < TRAIL; i++) {
+      const u = dir * (wispPhase - i * 0.0017) + w * 0.5;
+      framePoint(((u % 1) + 1) % 1, time - i * 0.007, w * 2.3, wTmp);
+      const j = (w * TRAIL + i) * 3;
+      wPos[j] = wTmp[0]; wPos[j + 1] = wTmp[1]; wPos[j + 2] = 0.03;
+    }
+  }
+  wispGeo.attributes.position.needsUpdate = true;
+}
+
 async function buildButton() {
   const [img, glowImg] = await Promise.all([loadImg(BUTTON_IMG), loadImg(GLOW_IMG),
     Promise.race([document.fonts.load("600 104px Cinzel"), new Promise((r) => setTimeout(r, 1500))])]);
@@ -340,63 +397,6 @@ function renderSmoke(layer) {
   renderer.setRenderTarget(null);
 }
 
-// ================================================================ page takeover: the hex floods the whole background
-// smoke field in screen space, with a ragged glowing front that spreads out from the button (low-res, then upscaled)
-const bgField = new THREE.ShaderMaterial({
-  vertexShader: quadVS, depthTest: false, depthWrite: false,
-  uniforms: { uTime: U.uTime, uR: { value: 0 }, uAspect: { value: 1 }, uCenter: { value: new THREE.Vector2() } },
-  fragmentShader: /* glsl */`
-    uniform float uTime, uR, uAspect; uniform vec2 uCenter; varying vec2 vUv;
-    float h2(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
-    float n2(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
-      return mix(mix(h2(i), h2(i + vec2(1, 0)), f.x), mix(h2(i + vec2(0, 1)), h2(i + vec2(1, 1)), f.x), f.y); }
-    float fbm(vec2 p){ float s = 0.0, a = 0.5; mat2 m = mat2(1.6, 1.2, -1.2, 1.6);
-      for (int i = 0; i < 5; i++) { s += a * n2(p); p = m * p; a *= 0.5; } return s; }
-    void main(){
-      vec2 p = (vUv - 0.5) * vec2(uAspect, 1.0);
-      float r = length(p - uCenter * 0.5 * vec2(uAspect, 1.0));
-      float t = uTime * 0.12;
-      vec2 q = p * 2.4 + vec2(0.0, -uTime * 0.05);
-      vec2 w1 = vec2(fbm(q + vec2(0.0, t)), fbm(q + vec2(5.2, 1.3) - t));
-      vec2 w2 = vec2(fbm(q + 3.0 * w1 + vec2(1.7, 9.2) + 0.5 * t), fbm(q + 3.0 * w1 + vec2(8.3, 2.8) - 0.4 * t));
-      float f = fbm(q + 3.0 * w2);
-      // the front is torn by the smoke itself
-      float edge = r - uR + (f - 0.5) * 0.4;
-      float inside = 1.0 - smoothstep(-0.03, 0.05, edge);
-      // near-black base, deep red billows, brighter crimson ridges, darker toward the corners
-      vec3 col = mix(vec3(0.010, 0.0, 0.003), vec3(0.20, 0.0, 0.018), smoothstep(0.35, 0.85, f));
-      col = mix(col, vec3(0.5, 0.01, 0.045), 0.7 * smoothstep(0.55, 0.95, f * length(w2) * 1.3));
-      col *= 0.55 + 0.45 * smoothstep(1.1, 0.0, r);
-      float band = exp(-abs(edge) * 16.0);
-      col += vec3(1.0, 0.05, 0.07) * band * (0.5 + f) * 1.5;
-      gl_FragColor = vec4(col, clamp(max(inside, band * 0.85), 0.0, 1.0));
-    }`,
-});
-const bgRT = new THREE.WebGLRenderTarget(16, 16, { type: THREE.HalfFloatType });
-const bgQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
-  uniforms: { tMap: { value: bgRT.texture } },
-  transparent: true, depthWrite: false,
-  // z = w -> sits on the far plane, so it only fills pixels nothing else covers
-  vertexShader: "varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 1.0, 1.0); }",
-  fragmentShader: "uniform sampler2D tMap; varying vec2 vUv; void main(){ gl_FragColor = texture2D(tMap, vUv);\n#include <colorspace_fragment>\n}",
-}));
-bgQuad.frustumCulled = false;
-bgQuad.renderOrder = -10;
-bgQuad.visible = false;
-scene.add(bgQuad);
-const btnNdc = new THREE.Vector3();
-function renderBackground() {
-  const on = bgField.uniforms.uR.value > 0.001;
-  bgQuad.visible = on;
-  if (!on) return;
-  btn.getWorldPosition(btnNdc).project(camera);
-  bgField.uniforms.uCenter.value.set(btnNdc.x, btnNdc.y);
-  fsQuad.material = bgField;
-  renderer.setRenderTarget(bgRT);
-  renderer.render(fsScene, fsCam);
-  renderer.setRenderTarget(null);
-}
-
 // ================================================================ embers (stateless GPU particles)
 const EMBERS = coarse ? 140 : 240;
 const eg = new THREE.BufferGeometry();
@@ -457,9 +457,6 @@ function apply(time) {
   const press = Math.sin(Math.PI * seg(T, 0.0, 0.22));
 
   U.uBurn.value = burn;
-  const flood = easeInOut(seg(T, 0.08, 1.55));
-  bgField.uniforms.uR.value = flood * (0.5 * Math.hypot(camera.aspect, 1) + 0.45);
-  document.body.classList.toggle("dark", flood > 0.45);
   btn.visible = burn < 0.999;
   btn.position.z = 0.22 * hover * (1 - burn) - 0.07 * press;
   btn.scale.setScalar(1 + 0.03 * hover - 0.02 * press);
@@ -535,9 +532,7 @@ function resize() {
   camera.lookAt(0, -0.2, 0);
   camera.updateProjectionMatrix();
   embers.material.uniforms.uPx.value = renderer.getPixelRatio() * h / 900;
-  const bgW = Math.min(coarse ? 360 : 640, Math.round(w / 2));
-  bgRT.setSize(bgW, Math.max(1, Math.round(bgW * h / w)));
-  bgField.uniforms.uAspect.value = w / h;
+  wispMat.uniforms.uPx.value = embers.material.uniforms.uPx.value;
   wake();
 }
 addEventListener("resize", resize);
@@ -561,16 +556,16 @@ function loop() {
   scene.rotation.set(tilt.y * 0.035, tilt.x * 0.06, 0);
 
   apply(time);
+  updateWisps(dt, time, hover * (1 - U.uBurn.value));
   scene.updateMatrixWorld();
   U.uBtnInv.value.copy(body.matrixWorld).invert();
   U.uCrownInv.value.copy(crown.matrixWorld).invert();
 
-  renderBackground();
   renderSmoke(smokeBack);
   renderSmoke(smokeFront);
   renderer.render(scene, camera);
 
-  const animating = dir !== 0 || p > 0 || Math.abs(hover - hoverTarget) > 0.001 || tilt.distanceTo(tiltGoal) > 0.001;
+  const animating = dir !== 0 || p > 0 || hover > 0.01 || Math.abs(hover - hoverTarget) > 0.001 || tilt.distanceTo(tiltGoal) > 0.001;
   if (animating) requestAnimationFrame(loop); else running = false;
 }
 resize();
