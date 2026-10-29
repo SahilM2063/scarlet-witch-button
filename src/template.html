@@ -292,7 +292,8 @@ loader.parse(bytes.buffer, "", (gltf) => {
 }, (err) => console.error(err));
 
 // ================================================================ smoke (domain-warped fbm, computed at low res)
-const SMOKE_W = 5.6, SMOKE_H = 3.9, SMOKE_RES = coarse ? 192 : 256;
+const SMOKE_W = 7.2, SMOKE_H = 5.0, SMOKE_RES = coarse ? 224 : 320;
+const SPREAD = 1.5;                                   // how far the hex smoke reaches
 const smokeField = /* glsl */`
 uniform float uTime, uSpread, uDensity, uHeat, uHollow, uSeed;
 uniform vec2 uSize;
@@ -413,7 +414,7 @@ function apply(time) {
     burn = sm(seg(T, 0.18, 1.0));
     surge = Math.sin(Math.PI * seg(T, 0.0, 0.45));
     lift = sm(seg(T, 0.05, 0.6));                        // the button rises into the burn instead of sitting flat
-    spread = 1.05 * easeOut(seg(T, 0.15, 1.3));
+    spread = SPREAD * easeOut(seg(T, 0.15, 1.3));
     settle = sm(seg(T, 1.3, 2.25));
     density = sm(seg(T, 0.12, 0.6)) * (1 - 0.5 * settle);
     front = sm(seg(T, 0.75, 1.3));                      // the near smoke waits until the button is gone
@@ -426,7 +427,7 @@ function apply(time) {
     flare = Math.sin(Math.PI * seg(T, 0.0, 0.7));        // smoke closes in, crown flares
     settle = 1 - sm(seg(T, 0.0, 0.45));
     const collapse = easeIn(seg(T, 0.7, 1.5));
-    spread = 1.05 * (1 + 0.12 * sm(seg(T, 0.0, 0.4))) * (1 - collapse);
+    spread = SPREAD * (1 + 0.12 * sm(seg(T, 0.0, 0.4))) * (1 - collapse);
     density = (0.5 + 0.5 * sm(seg(T, 0.0, 0.35))) * (1 - sm(seg(T, 1.2, 1.7)));
     front = 1 - sm(seg(T, 0.55, 0.9));                  // clear the air in front before the button re-forms
     reveal = 1 - easeInOut(seg(T, 0.2, 1.05));           // tips go first, the centre last
@@ -465,7 +466,7 @@ function apply(time) {
   smokeBack.u.uDensity.value = density;
   smokeFront.u.uDensity.value = density * front * (0.62 - 0.5 * settle);
   embers.material.uniforms.uEmit.value = reduced ? 0 : Math.min(1.4, emit);
-  embers.material.uniforms.uSpread.value = Math.max(spread / 1.05, 0.35 * (1 - burn) + burn * 0.6);
+  embers.material.uniforms.uSpread.value = Math.max(spread / SPREAD, 0.35 * (1 - burn) + burn * 0.6);
 }
 
 function toggle() {
