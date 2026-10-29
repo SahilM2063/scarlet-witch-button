@@ -524,9 +524,10 @@ function resize() {
   const w = innerWidth, h = innerHeight;
   renderer.setSize(w, h, false);
   camera.aspect = w / h;
-  // fit a 3.4 x 3.4 content box (crown + smoke), aimed a little low so the caption sits under the crown
+  // fit a 4.2 x 4.2 content box (crown + smoke), aimed a little low so the caption sits under the crown;
+  // a bigger box = everything drawn smaller
   const half = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
-  const dist = Math.max(1.7 / half, 1.7 / (half * camera.aspect)) + 0.4;
+  const dist = Math.max(2.1 / half, 2.1 / (half * camera.aspect)) + 0.4;
   camera.position.set(0, -0.2, dist);
   camera.lookAt(0, -0.2, 0);
   camera.updateProjectionMatrix();
