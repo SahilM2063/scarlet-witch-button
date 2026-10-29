@@ -24,12 +24,6 @@
   .ui { position: fixed; left: 0; right: 0; margin: 0; text-align: center; pointer-events: none; color: var(--muted); }
   .hint { bottom: 52px; font-size: 12px; letter-spacing: .18em; text-transform: lowercase; transition: opacity .6s ease; }
   footer.ui { bottom: 20px; }
-  .credit {
-    position: fixed; right: 12px; bottom: 10px; z-index: 2;
-    margin: 0; font-size: 12px; letter-spacing: .18em; color: var(--muted);   /* same type as the hints */
-  }
-  .credit a { color: inherit; text-decoration: none; transition: opacity .2s ease; }
-  .credit a:hover, .credit a:focus-visible { text-decoration: underline; }
   footer b { font: 600 13px/1.6 Cinzel, Georgia, serif; letter-spacing: .32em; color: #7d1328; }
   .sr {
     position: fixed; left: 50%; top: 50%; width: 1px; height: 1px; padding: 0; margin: 0;
@@ -43,7 +37,6 @@
 <canvas id="c" aria-hidden="true"></canvas>
 <button class="sr" id="a11y" type="button">Cast chaos magic</button>
 <p class="ui hint" id="hint" aria-live="polite">click</p>
-<p class="credit">meet dev <a href="https://x.com/makadia_sahil" target="_blank" rel="noopener"><i>Sahil</i></a></p>
 <footer class="ui"><b>The Scarlet Witch</b></footer>
 
 <script type="importmap">
@@ -455,8 +448,11 @@ function apply(time) {
   crown.visible = crownReady && reveal > 0;
   crown.scale.setScalar(0.84 + 0.16 * grow);
   const sway = reduced ? 0 : settle;
-  crown.position.set(0, 0.1 + Math.sin(time * 1.1) * 0.035 * sway, 0.15 + 0.15 * grow);
-  crown.rotation.set(0.32 * (1 - grow) + Math.sin(time * 0.7) * 0.025 * sway, Math.sin(time * 0.55) * 0.16 * sway, 0);
+  // the crown turns to follow the cursor (tilt is the smoothed pointer, -1..1)
+  const look = reduced ? 0 : settle;
+  crown.position.set(tilt.x * 0.1 * look, 0.1 + Math.sin(time * 1.1) * 0.035 * sway - tilt.y * 0.06 * look, 0.15 + 0.15 * grow);
+  crown.rotation.set(0.32 * (1 - grow) + Math.sin(time * 0.7) * 0.025 * sway + tilt.y * 0.2 * look,
+                     Math.sin(time * 0.55) * 0.08 * sway + tilt.x * 0.38 * look, -tilt.x * 0.04 * look);
   U.uRim.value = reveal * (0.75 + 0.25 * Math.sin(time * 1.7) + 1.8 * flare);
   U.uGlow.value = 0.18 * settle * (0.5 + 0.5 * Math.sin(time * 1.3)) + 0.25 * flare;
   rimL.intensity = rimR.intensity = 9 * reveal * (1 + flare);
