@@ -12,7 +12,8 @@
 <style>
   :root { --bg: #f4f2ee; --muted: #9a8f91; --hex: #b30d33; }
   * { box-sizing: border-box; }
-  html, body { height: 100%; margin: 0; }
+  html, body { height: 100%; margin: 0; overflow: hidden; overscroll-behavior: none; }
+  body { position: fixed; inset: 0; touch-action: none; }   /* one fixed screen: no scroll, no bounce */
   body {
     background: radial-gradient(120% 90% at 50% 45%, #fbfaf7 0%, var(--bg) 60%, #e9e5df 100%) fixed, var(--bg);
     font: 400 14px/1.4 Inter, system-ui, sans-serif;
@@ -23,6 +24,12 @@
   .ui { position: fixed; left: 0; right: 0; margin: 0; text-align: center; pointer-events: none; color: var(--muted); }
   .hint { bottom: 64px; font-size: 12px; letter-spacing: .18em; text-transform: lowercase; transition: opacity .6s ease; }
   footer.ui { bottom: 18px; font-size: 11px; letter-spacing: .08em; }
+  .credit {
+    position: fixed; right: 12px; bottom: 10px; z-index: 2;
+    font-size: 9px; letter-spacing: .06em; color: var(--muted); text-decoration: none; opacity: .75;
+    transition: opacity .2s ease, color .2s ease;
+  }
+  .credit:hover, .credit:focus-visible { opacity: 1; color: var(--hex); }
   footer b { display: block; font: 600 13px/1.6 Cinzel, Georgia, serif; letter-spacing: .32em; color: #7d1328; }
   .sr {
     position: fixed; left: 50%; top: 50%; width: 1px; height: 1px; padding: 0; margin: 0;
@@ -36,6 +43,7 @@
 <canvas id="c" aria-hidden="true"></canvas>
 <button class="sr" id="a11y" type="button">Cast chaos magic</button>
 <p class="ui hint" id="hint" aria-live="polite">click</p>
+<a class="credit" href="https://x.com/makadia_sahil" target="_blank" rel="noopener">made by dev &middot; @makadia_sahil</a>
 <footer class="ui"><b>The Scarlet Witch</b>real-time WebGL &middot; smoke written in shaders</footer>
 
 <script type="importmap">
