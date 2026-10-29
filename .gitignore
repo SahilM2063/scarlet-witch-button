@@ -3,3 +3,4 @@ __pycache__/
 .claude/
 model/crown_source.glb
 recording/
+recording.log
